@@ -79,6 +79,12 @@ pub(crate) struct AgentConfig {
     pub redirect_auth_headers: RedirectAuthHeaders,
     pub user_agent: String,
     pub tls_config: TlsConfig,
+    #[cfg(feature = "keepalive")]
+    pub tcp_keepalive_time: Option<Duration>,
+    #[cfg(feature = "keepalive")]
+    pub tcp_keepalive_interval: Option<Duration>,
+    #[cfg(feature = "keepalive")]
+    pub tcp_keepalive_retries: Option<u32>,
 }
 
 /// Agents keep state between requests.
@@ -263,6 +269,12 @@ impl AgentBuilder {
                 redirect_auth_headers: RedirectAuthHeaders::Never,
                 user_agent: format!("ureq/{}", env!("CARGO_PKG_VERSION")),
                 tls_config: TlsConfig(crate::default_tls_config()),
+                #[cfg(feature = "keepalive")]
+                tcp_keepalive_time: None,
+                #[cfg(feature = "keepalive")]
+                tcp_keepalive_interval: None,
+                #[cfg(feature = "keepalive")]
+                tcp_keepalive_retries: None,
             },
             #[cfg(feature = "proxy-from-env")]
             try_proxy_from_env: true,
@@ -320,6 +332,46 @@ impl AgentBuilder {
     /// Adding a proxy will disable `try_proxy_from_env`.
     pub fn proxy(mut self, proxy: Proxy) -> Self {
         self.config.proxy = Some(proxy);
+        self
+    }
+
+    /// Set the amount of time after which TCP keepalive probes will be sent on
+    /// idle connections held in the pool.
+    ///
+    /// This will set `TCP_KEEPALIVE` on macOS and iOS, and
+    /// `TCP_KEEPIDLE` on all other Unix operating systems, except
+    /// OpenBSD and Haiku which don't support any way to set this
+    /// option. On Windows, this sets the value of the `tcp_keepalive`
+    /// struct's `keepalivetime` field.
+    ///
+    /// Some platforms specify this value in seconds, so sub-second
+    /// specifications may be omitted.
+    #[cfg(feature = "keepalive")]
+    pub fn tcp_keepalive_time(mut self, timeout: Duration) -> Self {
+        self.config.tcp_keepalive_time = Some(timeout);
+        self
+    }
+
+    /// Set the value of the `TCP_KEEPINTVL` option for connections held in the pool. On Windows, this sets the
+    /// value of the `tcp_keepalive` struct's `keepaliveinterval` field.
+    ///
+    /// Sets the time interval between TCP keepalive probes.
+    ///
+    /// Some platforms specify this value in seconds, so sub-second
+    /// specifications may be omitted.
+    #[cfg(feature = "keepalive")]
+    pub fn tcp_keepalive_interval(mut self, interval: Duration) -> Self {
+        self.config.tcp_keepalive_interval = Some(interval);
+        self
+    }
+
+    /// Set the value of the `TCP_KEEPCNT` option for the  TCP connections held in the pool
+    ///
+    /// Set the maximum number of TCP keepalive probes that will be sent before
+    /// dropping a connection, if TCP keepalive is enabled on this socket.
+    #[cfg(feature = "keepalive")]
+    pub fn tcp_keepalive_retries(mut self, retries: u32) -> Self {
+        self.config.tcp_keepalive_retries = Some(retries);
         self
     }
 
