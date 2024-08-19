@@ -2,6 +2,7 @@ use std::collections::hash_map::Entry;
 use std::collections::{HashMap, VecDeque};
 use std::io::{self, Read};
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use crate::agent::AgentState;
 use crate::stream::Stream;
@@ -37,11 +38,12 @@ pub(crate) struct ConnectionPool {
     inner: Mutex<Inner>,
     max_idle_connections: usize,
     max_idle_connections_per_host: usize,
+    stale_after: Option<Duration>,
 }
 
 struct Inner {
     // the actual pooled connection. however only one per hostname:port.
-    recycle: HashMap<PoolKey, VecDeque<Stream>>,
+    recycle: HashMap<PoolKey, VecDeque<(Instant, Stream)>>,
     // This is used to keep track of which streams to expire when the
     // pool reaches MAX_IDLE_CONNECTIONS. The corresponding PoolKeys for
     // recently used Streams are added to the back of the queue;
@@ -76,6 +78,7 @@ impl ConnectionPool {
     pub(crate) fn new_with_limits(
         max_idle_connections: usize,
         max_idle_connections_per_host: usize,
+        stale_after: Option<Duration>,
     ) -> Self {
         ConnectionPool {
             inner: Mutex::new(Inner {
@@ -84,6 +87,7 @@ impl ConnectionPool {
             }),
             max_idle_connections,
             max_idle_connections_per_host,
+            stale_after,
         }
     }
 
@@ -100,24 +104,39 @@ impl ConnectionPool {
 
     fn remove(&self, key: &PoolKey) -> Option<Stream> {
         let mut inner = self.inner.lock().unwrap();
+        let inner = &mut *inner;
         match inner.recycle.entry(key.clone()) {
             Entry::Occupied(mut occupied_entry) => {
                 let streams = occupied_entry.get_mut();
-                // Take the newest stream.
-                let stream = streams.pop_back();
-                let stream = stream.expect("invariant failed: empty VecDeque in `recycle`");
 
-                if streams.is_empty() {
-                    occupied_entry.remove();
+                loop {
+                    // Take the newest stream.
+                    let stream = streams.pop_back();
+                    let (used_at, stream) =
+                        stream.expect("invariant failed: empty VecDeque in `recycle`");
+
+                    // Remove the newest matching PoolKey from self.lru. That
+                    // corresponds to the stream we just removed from `recycle`.
+                    remove_last_match(&mut inner.lru, key)
+                        .expect("invariant failed: key in recycle but not in lru");
+
+                    if let Some(stale_after) = self.stale_after {
+                        if used_at.elapsed() > stale_after {
+                            if streams.is_empty() {
+                                occupied_entry.remove();
+                                break None;
+                            }
+
+                            continue;
+                        }
+                    }
+                    if streams.is_empty() {
+                        occupied_entry.remove();
+                    }
+
+                    debug!("pulling stream from pool: {:?} -> {:?}", key, stream);
+                    break Some(stream);
                 }
-
-                // Remove the newest matching PoolKey from self.lru. That
-                // corresponds to the stream we just removed from `recycle`.
-                remove_last_match(&mut inner.lru, key)
-                    .expect("invariant failed: key in recycle but not in lru");
-
-                debug!("pulling stream from pool: {:?} -> {:?}", key, stream);
-                Some(stream)
             }
             Entry::Vacant(_) => None,
         }
@@ -133,7 +152,7 @@ impl ConnectionPool {
         match inner.recycle.entry(key.clone()) {
             Entry::Occupied(mut occupied_entry) => {
                 let streams = occupied_entry.get_mut();
-                streams.push_back(stream);
+                streams.push_back((Instant::now(), stream));
                 if streams.len() > self.max_idle_connections_per_host {
                     // Remove the oldest entry
                     let stream = streams.pop_front().expect("empty streams list");
@@ -148,7 +167,7 @@ impl ConnectionPool {
                 }
             }
             Entry::Vacant(vacant_entry) => {
-                vacant_entry.insert(vec![stream].into());
+                vacant_entry.insert(vec![(Instant::now(), stream)].into());
             }
         }
         inner.lru.push_back(key.clone());
@@ -357,7 +376,7 @@ mod tests {
         // Test inserting connections with different keys into the pool,
         // filling and draining it. The pool should evict earlier connections
         // when the connection limit is reached.
-        let pool = ConnectionPool::new_with_limits(10, 1);
+        let pool = ConnectionPool::new_with_limits(10, 1, None);
         let hostnames = (0..pool.max_idle_connections * 2).map(|i| format!("{}.example", i));
         let poolkeys = hostnames.map(|hostname| PoolKey {
             scheme: "https".to_string(),
@@ -382,7 +401,7 @@ mod tests {
         // Test inserting connections with the same key into the pool,
         // filling and draining it. The pool should evict earlier connections
         // when the per-host connection limit is reached.
-        let pool = ConnectionPool::new_with_limits(10, 2);
+        let pool = ConnectionPool::new_with_limits(10, 2, None);
         let poolkey = PoolKey {
             scheme: "https".to_string(),
             hostname: "example.com".to_string(),
@@ -406,7 +425,7 @@ mod tests {
     fn pool_checks_proxy() {
         // Test inserting different poolkeys with same address but different proxies.
         // Each insertion should result in an additional entry in the pool.
-        let pool = ConnectionPool::new_with_limits(10, 1);
+        let pool = ConnectionPool::new_with_limits(10, 1, None);
         let url = Url::parse("zzz:///example.com").unwrap();
         let pool_key = PoolKey::new(&url, None);
 

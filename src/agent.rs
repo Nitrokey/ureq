@@ -40,6 +40,7 @@ pub struct AgentBuilder {
     try_proxy_from_env: bool,
     max_idle_connections: usize,
     max_idle_connections_per_host: usize,
+    max_idle_duration: Option<Duration>,
     /// Cookies saved between requests.
     /// Invariant: All cookies must have a nonempty domain and path.
     #[cfg(feature = "cookies")]
@@ -282,6 +283,7 @@ impl AgentBuilder {
             try_proxy_from_env: false,
             max_idle_connections: DEFAULT_MAX_IDLE_CONNECTIONS,
             max_idle_connections_per_host: DEFAULT_MAX_IDLE_CONNECTIONS_PER_HOST,
+            max_idle_duration: None,
             resolver: StdResolver.into(),
             #[cfg(feature = "cookies")]
             cookie_store: None,
@@ -306,6 +308,7 @@ impl AgentBuilder {
                 pool: ConnectionPool::new_with_limits(
                     self.max_idle_connections,
                     self.max_idle_connections_per_host,
+                    self.max_idle_duration,
                 ),
                 #[cfg(feature = "cookies")]
                 cookie_tin: CookieTin::new(self.cookie_store.unwrap_or_else(CookieStore::default)),
@@ -372,6 +375,15 @@ impl AgentBuilder {
     #[cfg(feature = "keepalive")]
     pub fn tcp_keepalive_retries(mut self, retries: u32) -> Self {
         self.config.tcp_keepalive_retries = Some(retries);
+        self
+    }
+
+    /// Configure the time after which an idle connection is considered "stale"
+    ///
+    /// This can be used if you know that idle connection will get silently killed by a
+    /// firewal after a certain time
+    pub fn max_idle_duration(mut self, stale_after: Duration) -> Self {
+        self.max_idle_duration = Some(stale_after);
         self
     }
 
