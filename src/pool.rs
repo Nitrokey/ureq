@@ -120,8 +120,10 @@ impl ConnectionPool {
                     remove_last_match(&mut inner.lru, key)
                         .expect("invariant failed: key in recycle but not in lru");
 
+                    debug!("stale_after: {:?}", self.stale_after);
                     if let Some(stale_after) = self.stale_after {
                         if used_at.elapsed() > stale_after {
+                            debug!("Removing stale stream from pool: {:?} -> {:?}, not used since {:?}", key, stream, used_at.elapsed());
                             if streams.is_empty() {
                                 occupied_entry.remove();
                                 break None;
@@ -134,7 +136,12 @@ impl ConnectionPool {
                         occupied_entry.remove();
                     }
 
-                    debug!("pulling stream from pool: {:?} -> {:?}", key, stream);
+                    debug!(
+                        "pulling stream from pool: {:?} -> {:?}, not used since {:?}",
+                        key,
+                        stream,
+                        used_at.elapsed()
+                    );
                     break Some(stream);
                 }
             }
