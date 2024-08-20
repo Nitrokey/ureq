@@ -232,6 +232,7 @@ impl Stream {
                 );
                 Ok(true)
             }
+            Err(e) if e.kind() == io::ErrorKind::TimedOut => Ok(true),
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => Ok(false),
             Err(e) => Err(e),
         };
