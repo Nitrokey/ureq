@@ -232,6 +232,7 @@ impl Stream {
                 );
                 Ok(true)
             }
+            Err(e) if e.kind() == io::ErrorKind::TimedOut => Ok(true),
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => Ok(false),
             Err(e) => Err(e),
         };
@@ -410,6 +411,36 @@ pub(crate) fn connect_host(
             TcpStream::connect_timeout(&sock_addr, timeout)
         } else {
             TcpStream::connect(sock_addr)
+        };
+
+        #[cfg(feature = "keepalive")]
+        let stream: Result<TcpStream, _> = match stream {
+            Err(err) => Err(err),
+            Ok(stream) => {
+                use socket2::TcpKeepalive;
+                let socket: socket2::Socket = stream.into();
+                let mut keepalive_config = TcpKeepalive::new();
+                let mut keepalive_enable = false;
+                if let Some(time) = unit.agent.config.tcp_keepalive_time {
+                    keepalive_config = keepalive_config.with_time(time);
+                    keepalive_enable = true;
+                }
+
+                if let Some(interval) = unit.agent.config.tcp_keepalive_interval {
+                    keepalive_config = keepalive_config.with_interval(interval);
+                    keepalive_enable = true;
+                }
+
+                if let Some(retries) = unit.agent.config.tcp_keepalive_retries {
+                    keepalive_config = keepalive_config.with_retries(retries);
+                    keepalive_enable = true;
+                }
+
+                if keepalive_enable {
+                    socket.set_tcp_keepalive(&keepalive_config)?;
+                }
+                Ok(socket.into())
+            }
         };
 
         if let Ok(stream) = stream {
