@@ -431,9 +431,15 @@ pub(crate) fn connect_host(
                     keepalive_enable = true;
                 }
 
+                #[cfg(not(target_os = "windows"))]
                 if let Some(retries) = unit.agent.config.tcp_keepalive_retries {
                     keepalive_config = keepalive_config.with_retries(retries);
                     keepalive_enable = true;
+                }
+
+                #[cfg(target_os = "windows")]
+                if unit.agent.config.tcp_keepalive_retries.is_some() {
+                    log::warn!("Keepalive retries configured but not supported on windows");
                 }
 
                 if keepalive_enable {
