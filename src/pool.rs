@@ -91,6 +91,13 @@ impl ConnectionPool {
         }
     }
 
+    pub fn clear(&self) {
+        *self.inner.lock().unwrap() = Inner {
+            recycle: HashMap::new(),
+            lru: VecDeque::new(),
+        };
+    }
+
     /// Return true if either of the max_* settings is 0, meaning we should do no work.
     fn noop(&self) -> bool {
         self.max_idle_connections == 0 || self.max_idle_connections_per_host == 0

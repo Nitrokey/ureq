@@ -144,6 +144,15 @@ impl Agent {
         AgentBuilder::new().build()
     }
 
+    /// Remove all idle connections from the pool
+    ///
+    /// Requests after this being called will use a fresh connection.
+    ///
+    /// Requests that terminate after this call will be added to the pool.
+    pub fn clear_pool(&self) {
+        self.state.pool.clear();
+    }
+
     /// Make a request with the HTTP verb as a parameter.
     ///
     /// This allows making requests with verbs that don't have a dedicated
